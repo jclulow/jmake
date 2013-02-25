@@ -15,8 +15,6 @@
 #include "ents.h"
 
 
-#define	MAXLINE	4096
-
 typedef enum parse_state_id {
 	PARSE_ERROR = -1,
 	PARSE_DONE = 0,
@@ -24,15 +22,14 @@ typedef enum parse_state_id {
 	PARSE_COMMAND,
 	PARSE_EXPANSION_SIMPLE,
 	PARSE_EXPANSION_FULL,
-	PARSE_READ_UNTIL_SEP,
-	PARSE_INCLUDE
+	PARSE_READ_UNTIL_SEP
 } parse_state_id_t;
 
 typedef struct parse_state {
 	parse_state_id_t ps_id;
 	parse_state_id_t ps_previd;
 
-	char ps_buf[MAXLINE];
+	char ps_buf[256 * 1024];
 	char *ps_bufpos;
 
 	make_line_t *ps_makeline;
@@ -42,6 +39,8 @@ typedef struct parse_state {
 	char *ps_left;
 	char *ps_right;
 	int ps_parens;
+
+	char *ps_include_file;
 } parse_state_t;
 
 
@@ -60,8 +59,7 @@ static parse_handler_t hdlrs[] = {
 	hdlr_cmd,			/* PARSE_COMMAND */
 	hdlr_read_expansion, 		/* PARSE_EXPANSION_SIMPLE */
 	hdlr_read_expansion_full,	/* PARSE_EXPANSION_FULL */
-	hdlr_read_until_sep,		/* PARSE_READ_UNTIL_SEP */
-	hdlr_include			/* PARSE_INCLUDE */
+	hdlr_read_until_sep		/* PARSE_READ_UNTIL_SEP */
 };
 
 
@@ -116,7 +114,7 @@ parse_push_state(parse_state_t *ps, parse_state_id_t id)
  * Main Entry Point:
  */
 int
-parse_line(make_line_t *ml)
+parse_line(make_line_t *ml, char **read_path)
 {
 	parse_state_t ps;
 
@@ -133,14 +131,17 @@ parse_line(make_line_t *ml)
 			/*
 			 * ERROR!
 			 */
-			fprintf(stderr, "parse error\n");
-			fprintf(stderr, "[%s:%d-%d]:\n%s\n", ml->ml_file, ml->ml_linemin,
+			fprintf(stderr, "Parse Error...\n");
+			fprintf(stderr, "[%s:%d-%d]:\n%s\n",
+			    ml->ml_file->mf_path, ml->ml_linemin,
 			    ml->ml_linemax, ml->ml_line);
 			for (i = 0; i < ps.ps_pos - ml->ml_line; i++)
 				fprintf(stderr, " ");
 			fprintf(stderr, "^\n");
 			return (-1);
 		} else if (ps.ps_id == PARSE_DONE) {
+			if (ps.ps_include_file != NULL)
+				*read_path = ps.ps_include_file;
 			return (0);
 		}
 		hdlrs[ps.ps_id](&ps);
@@ -191,7 +192,7 @@ hdlr_read_until_sep(parse_state_t *ps)
 		 */
 		if (strstr(ps->ps_buf, "include") == ps->ps_buf) {
 			add_make_include(ps->ps_makeline, ps->ps_buf +
-			    strlen("include") + 1);
+			    strlen("include") + 1, &ps->ps_include_file);
 			ps->ps_id = PARSE_DONE;
 		} else {
 			fprintf(stderr, "unexpected EOL\n");
@@ -315,19 +316,6 @@ hdlr_read_expansion_full(parse_state_t *ps)
 	}
 	parse_buf_putc(ps, c);
 	ps->ps_pos++;
-}
-
-static void
-hdlr_include(parse_state_t *ps)
-{
-	if (strstr(ps->ps_pos, "include ") == ps->ps_pos) {
-		ps->ps_pos += strlen("include ");
-		add_make_include(ps->ps_makeline, ps->ps_pos);
-		ps->ps_id = PARSE_DONE;
-	} else {
-		fprintf(stderr, "expected 'include'\n");
-		ps->ps_id = PARSE_ERROR;
-	}
 }
 
 /* vim: set ts=8 tw=80 noet sw=8 */
