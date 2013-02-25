@@ -189,9 +189,9 @@ hdlr_read_until_sep(parse_state_t *ps)
 		/*
 		 * XXX End of line before separator?
 		 */
-		if (strstr(ps->ps_buf, "include ") == ps->ps_buf) {
-			//ps->ps_pos += strlen("include ");
-			add_make_include(ps->ps_makeline, ps->ps_buf + strlen("include "));
+		if (strstr(ps->ps_buf, "include") == ps->ps_buf) {
+			add_make_include(ps->ps_makeline, ps->ps_buf +
+			    strlen("include") + 1);
 			ps->ps_id = PARSE_DONE;
 		} else {
 			fprintf(stderr, "unexpected EOL\n");
@@ -206,6 +206,9 @@ hdlr_read_until_sep(parse_state_t *ps)
 		ps->ps_pos += 2;
 		ps->ps_scope = parse_buf_commit(ps);
 		parse_buf_reset(ps);
+	} else if (c == ':' && cc == ':') {
+		fprintf(stderr, "support for :: not yet implemented\n");
+		ps->ps_id = PARSE_ERROR;
 	} else if (c == ':') {
 		/*
 		 * Target.
@@ -223,16 +226,16 @@ hdlr_read_until_sep(parse_state_t *ps)
 		 */
 		ps->ps_pos++;
 		add_make_macro(ps->ps_makeline, ps->ps_scope, ps->ps_buf,
-		    ps->ps_pos, B_FALSE);
+		    ps->ps_pos, B_TRUE);
 
 		ps->ps_id = PARSE_DONE;
 	} else if (c == '+' && cc == '=') {
 		/*
 		 * Append Macro.
 		 */
-		ps->ps_pos++;
+		ps->ps_pos += 2;
 		add_make_macro(ps->ps_makeline, ps->ps_scope, ps->ps_buf,
-		    ps->ps_pos, B_TRUE);
+		    ps->ps_pos, B_FALSE);
 
 		ps->ps_id = PARSE_DONE;
 	} else if (c == '$') {

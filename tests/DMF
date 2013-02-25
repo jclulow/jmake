@@ -1,0 +1,29 @@
+
+
+A_VALUE = a_value
+
+
+all:	$(A_VALUE)
+
+
+a_value:
+	echo a_value
+
+b_value:
+	echo b_value
+
+A_VALUE = b_value
+A_VALUE += c_value $$(LATER)
+A_VALUE += d_value
+A_VALUE += e_value
+
+
+more:	$$(LATER)
+	echo second time: $(A_VALUE)
+
+LATER = later
+
+later:
+	echo "aaannnd later"
+
+# vim: set syn=make:

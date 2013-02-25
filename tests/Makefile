@@ -21,6 +21,10 @@ extra targets: depend on me
 	echo extra
 	echo commands
 
+MACH	= arm
+
+$(MACH)_targ:	$(MACH).c
+
 
 targets:
 	more!

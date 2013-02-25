@@ -11,5 +11,6 @@ extern void add_make_command(make_line_t *, char *);
 extern void add_make_include(make_line_t *, char *);
 
 extern void dump_ents();
+extern void dump_cmd_for_target(char *);
 
 #endif	/* _ENTS_H_ */

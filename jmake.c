@@ -156,23 +156,39 @@ awesome()
 	fprintf(stderr, "\n\n");
 
 	dump_ents();
+
 }
 
 int
 main(int argc, char **argv)
 {
 	int err;
+	char *fflag = NULL;
+	int c;
 
-	/*
-	 * XXX Parse options:
-	 */
+	while ((c = getopt(argc, argv, ":f:")) != -1) {
+		switch (c) {
+		case 'f':
+			fflag = optarg;
+			break;
+		case ':':
+			fprintf(stderr, "option -%c requires an operand\n",
+			     optopt);
+			exit(1);
+			break;
+		case '?':
+			fprintf(stderr, "unknown option -%c\n", optopt);
+			exit(1);
+			break;
+		}
+	}
 
-	if (argc != 2) {
-		fprintf(stderr, "Usage: %s <Makefile>\n", argv[0]);
+	if (fflag == NULL) {
+		fprintf(stderr, "Usage: %s -f <Makefile> ...\n", argv[0]);
 		return (1);
 	}
 
-	if ((err = parse_makefile(argv[1])) != 0) {
+	if ((err = parse_makefile(fflag)) != 0) {
 		fprintf(stderr, "Parse failed.\n");
 		return (err);
 	}
@@ -180,6 +196,10 @@ main(int argc, char **argv)
 	fold_lines();
 
 	awesome();
+
+	for (; optind < argc; optind++) {
+		dump_cmd_for_target(argv[optind]);
+	}
 
 	return (0);
 }

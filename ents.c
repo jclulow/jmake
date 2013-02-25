@@ -132,7 +132,7 @@ dump_ent(make_ent_t *t)
 		fprintf(stderr, "\tname:%s\n\tvalue:%s\n",
 		    m->me_name, m->me_value);
 		fprintf(stderr, "\ttype: %s\n", m->me_reset_value ==
-		    B_TRUE ? "+=" : "=");
+		    B_TRUE ? "=" : "+=");
 		break;
 	}
 	case ENT_TARGET: {
@@ -169,6 +169,27 @@ dump_ents()
 
 	TAILQ_FOREACH(me, &make_ents, me_linkage) {
 		dump_ent(me);
+	}
+}
+
+void
+dump_cmd_for_target(char *targ)
+{
+	make_ent_t *t;
+	char *outval = NULL;
+
+	fprintf(stderr, "\n===================== %s =============\n\n", targ);
+
+	TAILQ_FOREACH(t, &make_ents, me_linkage) {
+		make_ent_target_t *me;
+		if (t->me_type != ENT_TARGET)
+			continue;
+
+		me = TO_TARGET(t);
+		if (strcmp(targ, me->me_name) != 0)
+			continue;
+
+		dump_ent(TO_ENT(me));
 	}
 }
 
@@ -218,6 +239,155 @@ free_splits(splitter_t *spl)
 	spl->spl_nwords = 0;
 }
 
+static char *
+trim(char *instr)
+{
+	char *pos;
+	char *lhs = NULL, *rhs = NULL;
+	char *ret;
+
+	/*
+	 * Find left-most non-whitespace character.
+	 */
+	for (pos = instr; *pos != '\0'; pos++) {
+		if (!ISSPACE(*pos)) {
+			lhs = pos;
+			break;
+		}
+	}
+
+	if (lhs == NULL)
+		return (strdup(""));
+
+	/*
+	 * Find right-most non-whitespace character.
+	 */
+	for (pos = lhs; *pos != '\0'; pos++) {
+		if (!ISSPACE(*pos))
+			rhs = pos;
+	}
+
+	ret = malloc(rhs - lhs + 2);
+	bcopy(lhs, ret, rhs - lhs + 1);
+	ret[rhs - lhs + 1] = '\0';
+
+	return (ret);
+}
+
+static char *
+lookup_macro_value(char *scope, char *name)
+{
+	make_ent_t *t;
+	char *outval = NULL;
+	TAILQ_FOREACH(t, &make_ents, me_linkage) {
+		make_ent_macro_t *me;
+		if (t->me_type != ENT_MACRO)
+			continue;
+
+		me = TO_MACRO(t);
+		if (scope != NULL && strcmp(scope, me->me_scope) != 0)
+			continue;
+
+		if (strcmp(name, me->me_name) != 0)
+			continue;
+
+		if (outval == NULL || me->me_reset_value == B_TRUE) {
+			if (outval == NULL)
+				free(outval);
+			outval = strdup(me->me_value);
+		} else {
+			char *x;
+			(void) asprintf(&x, "%s %s", outval, me->me_value);
+			free(outval);
+			outval = x;
+		}
+	}
+
+	if (outval == NULL)
+		return ("");
+	else
+		return (outval);
+}
+
+static char *
+expand_string_impl(char *expstr)
+{
+	return (strdup(lookup_macro_value(NULL, expstr)));
+}
+
+static char *
+expand_string(char *instr)
+{
+	char *pos;
+	char *subbuf = malloc(MAXLINE);
+	char *buf = malloc(MAXLINE);
+	char *opos = buf;
+	char *spos = subbuf;
+	int parens = 0;
+	char *ret;
+
+	*opos = '\0';
+
+	for (pos = instr; *pos != '\0'; pos++) {
+		char c = *pos;
+		char cc = *(pos + 1);
+
+		if (c == '$' && cc == '(') {
+			/*
+			 * Full Expansion.
+			 */
+			parens++;
+			pos++; /* Skip '(' */
+			subbuf[0] = '\0';
+			spos = subbuf;
+		} else if (c == '$') {
+			/*
+			 * Single Character Expansion.
+			 */
+			if (cc == '$') {
+				*opos++ = '$';
+				*opos = '\0';
+				pos++; /* Skip '$' */
+			} else {
+				fprintf(stderr, "need expansion for $%c\n", cc);
+				exit(5);
+			}
+		} else if (parens > 0) {
+			if (c == ')' && --parens == 0) {
+				char *subexp = expand_string(subbuf);
+				char *yy = expand_string_impl(subexp);
+				char *xx;
+				free(subexp);
+				for (xx = yy; *xx != '\0'; xx++)
+					*opos++ = *xx;
+				*opos = '\0';
+				free(yy);
+			} else {
+				*spos++ = c;
+				*spos = '\0';
+			}
+		} else {
+			*opos++ = c;
+			*opos = '\0';
+		}
+	}
+
+	if (parens > 0) {
+		fprintf(stderr, "unbalanced parens in string: %s\n", instr);
+		exit(6);
+	}
+
+	fprintf(stderr, "EXPAND STRING: %s\n", instr);
+	fprintf(stderr, "           TO: %s\n", buf);
+
+	ret = strdup(buf);
+
+	free(subbuf);
+	free(buf);
+
+	return (ret);
+}
+
 static void
 split_into_words(char *instr, splitter_t *spl)
 {
@@ -239,7 +409,6 @@ split_into_words(char *instr, splitter_t *spl)
 		} else if (c == '$' && cc == '(') {
 			parens++;
 			*opos++ = '$';
-			*opos++ = '(';
 		} else if (ISSPACE(c) && opos != buf) {
 			/*
 			 * Commit word to list:
@@ -286,9 +455,9 @@ add_make_macro(make_line_t *line, char *scope, char *name, char *value, boolean_
 			for (j = 0; j < spl_scopes.spl_nwords; j++) {
 				make_ent_macro_t *me = TO_MACRO(new_make_ent(
 				    ENT_MACRO, line));
-				me->me_scope = strdup(spl_scopes.spl_words[j]);
-				me->me_name = strdup(spl_names.spl_words[i]);
-				me->me_value = strdup(value);
+				me->me_scope = expand_string(spl_scopes.spl_words[j]);
+				me->me_name = expand_string(spl_names.spl_words[i]);
+				me->me_value = trim(value);
 				me->me_reset_value = reset_val;
 
 				TAILQ_INSERT_TAIL(&make_ents, TO_ENT(me), me_linkage);
@@ -297,8 +466,8 @@ add_make_macro(make_line_t *line, char *scope, char *name, char *value, boolean_
 			make_ent_macro_t *me = TO_MACRO(new_make_ent(ENT_MACRO,
 			    line));
 			me->me_scope = NULL;
-			me->me_name = strdup(spl_names.spl_words[i]);
-			me->me_value = strdup(value);
+			me->me_name = expand_string(spl_names.spl_words[i]);
+			me->me_value = trim(value);
 			me->me_reset_value = reset_val;
 
 			TAILQ_INSERT_TAIL(&make_ents, TO_ENT(me), me_linkage);
@@ -328,12 +497,12 @@ add_make_target(make_line_t *line, char *name, char *deps)
 		TAILQ_INIT(&me->me_commands);
 		TAILQ_INIT(&me->me_deps);
 
-		me->me_name = strdup(spl_names.spl_words[i]);
+		me->me_name = expand_string(spl_names.spl_words[i]);
 
 		for (j = 0; j < spl_deps.spl_nwords; j++) {
 			make_ent_dep_t *dep = TO_DEP(new_make_ent(ENT_DEP,
 			    line));
-			dep->me_name = strdup(spl_deps.spl_words[j]);
+			dep->me_name = expand_string(spl_deps.spl_words[j]);
 			TAILQ_INSERT_TAIL(&me->me_deps, TO_ENT(dep),
 			    me_linkage);
 		}
