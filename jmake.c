@@ -11,23 +11,15 @@
 #include <sys/sysmacros.h>
 #include <sys/ctype.h>
 
+#include "jmake.h"
+#include "ents.h"
+
 
 #define	MAXLINE	4096
-
 
 TAILQ_HEAD(make_line_head, make_line) make_lines =
     TAILQ_HEAD_INITIALIZER(make_lines);
 
-typedef struct make_line {
-	char *ml_file;
-	int ml_linemin;
-	int ml_linemax;
-
-	char *ml_line;
-
-	TAILQ_ENTRY(make_line) ml_linkage;
-
-} make_line_t;
 
 static make_line_t *
 add_make_line(char *file, int lineno, char *line)
@@ -150,199 +142,20 @@ dump_make_file()
 	}
 }
 
-typedef enum line_parse_state {
-	LPS_REST = 1,
-	LPS_MACRO_OR_TARGET = 2,
-	LPS_MOT_WAIT_OPERATOR = 3,
-	LPS_MOT_EQUALS = 4,
-	LPS_MOT_TARGET_OR_CONDMACRO = 5
-} line_parse_state_t;
-
-
-#define	LINE_ERROR(ml, fmt, ...) 	\
-	(void) fprintf(stderr, "ERROR: %u [%s:%d-%d] " fmt "\n", lps, \
-	    ml->ml_file, ml->ml_linemin, ml->ml_linemax, ##__VA_ARGS__)
-
-static int
-awesome_line(make_line_t *ml)
-{
-	char tmp[MAXLINE], *tpos;
-	char *pos;
-	line_parse_state_t lps;
-
-	char *id0 = NULL, *id1 = NULL, *val0 = NULL;
-
-	/*
-	 * Let's go for a walk through the line:
-	 */
-	pos = ml->ml_line;
-	lps = LPS_REST;
-	for (;;) {
-		char c = *pos++;
-
-		/*
-		 * We've hit a comment, so make like it's the end of the
-		 * line.
-		 */
-		if (c == '#')
-			c = '\0';
-
-		switch (lps) {
-		case LPS_REST:
-			if (c == '\0') {
-				/*
-				 * Empty line.
-				 */
-				LINE_ERROR(ml, "empty line");
-				return (0);
-			} else if (c == '\t') {
-				/*
-				 * Commands to execute.
-				 */
-				LINE_ERROR(ml, "commands '%s'", pos);
-				return (0);
-			} else if (ISSPACE(c)) {
-				break;
-			} else if (ISALNUM(c) || c == '_' || c == '-') {
-				tpos = tmp;
-				*tpos++ = c;
-				lps = LPS_MACRO_OR_TARGET;
-				break;
-			} else {
-				LINE_ERROR(ml, "unexpected character '%c'", c);
-				return (-1);
-			}
-			break;
-
-		case LPS_MACRO_OR_TARGET:
-			if (c == '\0') {
-				LINE_ERROR(ml, "unexpected end of line");
-				return (-1);
-			} else if (ISALNUM(c) || c == '_' || c == '-') {
-				*tpos++ = c;
-				break;
-			} else {
-				*tpos = '\0';
-				id0 = strdup(tmp);
-				if (ISSPACE(c)) {
-					lps = LPS_MOT_WAIT_OPERATOR;
-				} else if (c == '=') {
-					lps = LPS_MOT_EQUALS;
-				} else if (c == ':') {
-					if (id1 != NULL) {
-						/*
-						 * XXX this is a condmacro
-						 * so abort
-						 */
-						LINE_ERROR(ml, "condmacro "
-						     "... OH GOD");
-					}
-					lps = LPS_MOT_TARGET_OR_CONDMACRO;
-				} else {
-					LINE_ERROR(ml, "unexpected character"
-					    " '%c'", c);
-					return (-1);
-				}
-				break;
-			}
-			break;
-
-		case LPS_MOT_WAIT_OPERATOR:
-			if (c == '\0') {
-				LINE_ERROR(ml, "unexpected end of line");
-				return (-1);
-			} else if (ISSPACE(c)) {
-				break;
-			} else if (c == ':') {
-				lps = LPS_MOT_TARGET_OR_CONDMACRO;
-				break;
-			} else if (c == '=') {
-				lps = LPS_MOT_EQUALS;
-				break;
-			} else if (c == '+') {
-				if (*pos == '=') {
-					pos++;
-					if (id1 != NULL)
-						LINE_ERROR(ml, "cond macro"
-						    " '%s'", id1);
-					LINE_ERROR(ml, "macro append %s", id0);
-					LINE_ERROR(ml, "value: %s", pos);
-					return (0);
-				} else {
-					LINE_ERROR(ml, "unexpected character"
-					     " '%c'", c);
-					return (-1);
-				}
-			} else {
-				if (strcmp(id0, "include") == 0) {
-					LINE_ERROR(ml, "include: %c%s", c, pos);
-					return (0);
-				}
-				/* XXX ? */
-				LINE_ERROR(ml, "unexpected character '%c'", c);
-				return (-1);
-			}
-
-		case LPS_MOT_EQUALS:
-			if (c == '\0') {
-				/*
-				 * Empty Macro.
-				 */
-				if (id1 != NULL)
-					LINE_ERROR(ml, "cond macro '%s'", id1);
-				LINE_ERROR(ml, "empty macro '%s'", id0);
-				return (0);
-			} else if (ISSPACE(c)) {
-				if (id1 != NULL)
-					LINE_ERROR(ml, "cond macro '%s'", id1);
-				LINE_ERROR(ml, "macro '%s'", id0);
-				LINE_ERROR(ml, "value '%s'", pos);
-				return (0);
-			} else {
-				LINE_ERROR(ml, "unexpected character '%c'", c);
-				return (-1);
-			}
-
-		case LPS_MOT_TARGET_OR_CONDMACRO:
-			if (c == '\0') {
-				/*
-				 * Target with no dependencies.
-				 */
-				LINE_ERROR(ml, "nodeps target '%s'", id0);
-				return (0);
-			} else if (c == '=') {
-				/*
-				 * Conditional Macro.
-				 */
-				id1 = id0;
-				id0 = NULL;
-				lps = LPS_REST;
-				break;
-			} else {
-				/*
-				 * Target with dependencies.
-				 */
-				LINE_ERROR(ml, "target '%s'", id0);
-				LINE_ERROR(ml, "deps '%s'", pos);
-				return (0);
-			}
-			break;
-
-		}
-	}
-
-	return (0);
-}
-
 static int
 awesome()
 {
 	make_line_t *ml;
 
 	TAILQ_FOREACH(ml, &make_lines, ml_linkage) {
-		if (awesome_line(ml) != 0)
+		//if (awesome_line(ml) != 0)
+		if (parse_line(ml) != 0)
 			return (-1);
 	}
+
+	fprintf(stderr, "\n\n");
+
+	dump_ents();
 }
 
 int
@@ -365,7 +178,6 @@ main(int argc, char **argv)
 	}
 
 	fold_lines();
-	dump_make_file();
 
 	awesome();
 
